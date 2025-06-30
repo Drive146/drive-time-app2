@@ -15,50 +15,19 @@ const DEFAULT_SETTINGS: SchedulerSettings = {
     availableTimeSlots: ALL_POSSIBLE_TIMES,
 };
 
-// Helper to create user-friendly error messages from Google API errors.
-function getGoogleSheetsErrorMessage(e: any, sheetName: string): string {
-    const errorMessage = e?.message || '';
-    if (errorMessage.startsWith('Configuration Error:')) {
-        return errorMessage; 
-    }
-
-    const error = e as GaxiosError;
-    const gaxiosErrorMessage = error.response?.data?.error_description || error.response?.data?.error?.message || e.message;
-    
-    console.error('Raw Google Sheets Error:', JSON.stringify(error.response?.data || e.message, null, 2));
-
-    if (errorMessage.includes('invalid_grant')) {
-        return (
-`Authentication failed: "invalid_grant". This likely means the private key and service account email do not match. Please double-check your GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY.`
-        );
-    }
-    
-    if (error.response?.data?.error?.message) {
-        const msg = error.response.data.error.message;
-        if (msg.includes('Unable to parse range')) {
-             return `The sheet (tab) name "${sheetName}" might be incorrect or the sheet is missing. Please check your GOOGLE_SHEET_NAME/GOOGLE_SETTINGS_SHEET_NAME in the environment configuration. Note: The name is case-sensitive.`;
-        }
-        if (error.response?.data?.error?.code === 403 && msg.includes('API has not been used')) {
-            return 'The Google Sheets API is not enabled for your project. Please enable it in the Google Cloud Console and try again.';
-        }
-        return `Google Sheets API Error: ${msg}`;
-    }
-
-    return gaxiosErrorMessage || 'An unknown error occurred with Google Sheets.';
-}
-
-
 // Function to get booking counts for a specific month
 export async function getBookingCountsForMonth(year: number, month: number): Promise<Record<string, number>> {
+  const sheets = await getSheetsClient();
+  if (!sheets) {
+    console.warn('Google Sheets client not available. Returning empty booking counts.');
+    return {};
+  }
+  
   const sheetId = process.env.GOOGLE_SHEET_ID;
   const sheetName = process.env.GOOGLE_SHEET_NAME || 'Bookings';
-
-  if (!sheetId) {
-    throw new Error('Configuration Error: Missing GOOGLE_SHEET_ID. This needs to be set in the deployment environment.');
-  }
+  if (!sheetId) return {};
 
   try {
-    const sheets = await getSheetsClient();
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: sheetName,
@@ -94,24 +63,24 @@ export async function getBookingCountsForMonth(year: number, month: number): Pro
     }
     return bookingCounts;
   } catch (e: any) {
-    const message = getGoogleSheetsErrorMessage(e, sheetName!);
-    console.error(`Could not fetch booking counts due to a Google Sheets error. Please check your configuration. Message: ${message}`);
-    // Return empty object on error to prevent server crash
+    console.error(`Could not fetch booking counts due to a Google Sheets error. Please check your configuration. Message: ${e.message}`);
     return {};
   }
 }
 
 // Function to get all booked time slots for a specific day
 export async function getBookedTimeSlotsForDay(date: string): Promise<Record<string, number>> {
+  const sheets = await getSheetsClient();
+  if (!sheets) {
+    console.warn('Google Sheets client not available. Returning empty booked slots.');
+    return {};
+  }
+
   const sheetId = process.env.GOOGLE_SHEET_ID;
   const sheetName = process.env.GOOGLE_SHEET_NAME || 'Bookings';
-
-   if (!sheetId) {
-    throw new Error('Configuration Error: Missing GOOGLE_SHEET_ID. This needs to be set in the deployment environment.');
-  }
+  if (!sheetId) return {};
   
   try {
-    const sheets = await getSheetsClient();
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
       range: sheetName,
@@ -142,24 +111,23 @@ export async function getBookedTimeSlotsForDay(date: string): Promise<Record<str
 
     return bookedTimeCounts;
   } catch (e: any) {
-    const message = getGoogleSheetsErrorMessage(e, sheetName!);
-    console.error(`Could not fetch booked time slots due to a Google Sheets error. Please check your configuration. Message: ${message}`);
-    // Return empty object on error to prevent server crash
+    console.error(`Could not fetch booked time slots due to a Google Sheets error. Please check your configuration. Message: ${e.message}`);
     return {};
   }
 }
 
 // Function to append user details
 export async function appendUserDetails(details: StoreUserDetailsInput): Promise<void> {
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  const sheetName = process.env.GOOGLE_SHEET_NAME || 'Bookings';
-
-  if (!sheetId) {
-    throw new Error('Configuration Error: Missing GOOGLE_SHEET_ID. This needs to be set in the deployment environment.');
+  const sheets = await getSheetsClient();
+  if (!sheets) {
+    throw new Error('Configuration Error: Google Sheets integration is not configured on the server. Cannot save booking.');
   }
   
+  const sheetId = process.env.GOOGLE_SHEET_ID;
+  const sheetName = process.env.GOOGLE_SHEET_NAME || 'Bookings';
+  if (!sheetId) throw new Error('Configuration Error: GOOGLE_SHEET_ID is not configured.');
+
   try {
-    const sheets = await getSheetsClient();
     await ensureSheetAndHeader(sheets, sheetId, sheetName, sheetHeaders);
 
     const timestamp = new Date().toISOString();
@@ -180,8 +148,8 @@ export async function appendUserDetails(details: StoreUserDetailsInput): Promise
       requestBody: { values: [row] },
     });
   } catch (e: any) {
-    const message = getGoogleSheetsErrorMessage(e, sheetName!);
-    throw new Error(message);
+    console.error(`Could not append user details due to a Google Sheets error. Please check your configuration. Message: ${e.message}`);
+    throw new Error(`Failed to save booking. Please try again later. (Reason: Google Sheets Error)`);
   }
 }
 
@@ -190,7 +158,6 @@ async function ensureSettingsSheet(sheets: any, spreadsheetId: string, sheetName
     try {
         await ensureSheetAndHeader(sheets, spreadsheetId, sheetName, settingsSheetHeaders);
 
-        // Check if default settings need to be written
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId,
             range: `${sheetName}!A2:B4`
@@ -219,9 +186,7 @@ async function ensureSettingsSheet(sheets: any, spreadsheetId: string, sheetName
             });
         }
     } catch(e: any) {
-        // This can happen if the sheet exists but is empty.
-        // In this case we write the full default config
-         const errorMessage = e?.message || '';
+         const errorMessage = (e as GaxiosError).response?.data?.error?.message || '';
          if (errorMessage.includes('Unable to parse range')) {
             await sheets.spreadsheets.values.update({
                  spreadsheetId,
@@ -241,15 +206,17 @@ async function ensureSettingsSheet(sheets: any, spreadsheetId: string, sheetName
 
 
 export async function getSchedulerSettingsFromSheet(): Promise<SchedulerSettings> {
-    const sheetId = process.env.GOOGLE_SHEET_ID;
-    const sheetName = process.env.GOOGLE_SETTINGS_SHEET_NAME || 'Settings';
-    if (!sheetId) {
-        console.warn('Configuration Error: Missing GOOGLE_SHEET_ID. Using default scheduler settings.');
+    const sheets = await getSheetsClient();
+    if (!sheets) {
+        console.warn('Google Sheets client not available. Using default scheduler settings.');
         return DEFAULT_SETTINGS;
     }
+    
+    const sheetId = process.env.GOOGLE_SHEET_ID;
+    const sheetName = process.env.GOOGLE_SETTINGS_SHEET_NAME || 'Settings';
+    if (!sheetId) return DEFAULT_SETTINGS;
 
     try {
-        const sheets = await getSheetsClient();
         await ensureSettingsSheet(sheets, sheetId, sheetName);
         
         const response = await sheets.spreadsheets.values.get({
@@ -273,21 +240,23 @@ export async function getSchedulerSettingsFromSheet(): Promise<SchedulerSettings
         };
 
     } catch (e: any) {
-        const message = getGoogleSheetsErrorMessage(e, sheetName);
-        console.error(`Could not fetch scheduler settings due to a Google Sheets error. Please check your configuration. Message: ${message}`);
-        // Return default settings on error to prevent server crash
+        console.error(`Could not fetch scheduler settings due to a Google Sheets error. Please check your configuration. Message: ${e.message}`);
         console.warn('Returning default settings due to Google Sheets API error.');
         return DEFAULT_SETTINGS;
     }
 }
 
 export async function updateSchedulerSettingsInSheet(settings: SchedulerSettings): Promise<void> {
+    const sheets = await getSheetsClient();
+    if (!sheets) {
+        throw new Error('Configuration Error: Google Sheets integration is not configured on the server. Cannot save settings.');
+    }
+
     const sheetId = process.env.GOOGLE_SHEET_ID;
     const sheetName = process.env.GOOGLE_SETTINGS_SHEET_NAME || 'Settings';
     if (!sheetId) throw new Error('Configuration Error: GOOGLE_SHEET_ID is not configured.');
 
     try {
-        const sheets = await getSheetsClient();
         await ensureSettingsSheet(sheets, sheetId, sheetName);
 
         const values = [
@@ -303,8 +272,8 @@ export async function updateSchedulerSettingsInSheet(settings: SchedulerSettings
             requestBody: { values },
         });
     } catch (e: any) {
-        const message = getGoogleSheetsErrorMessage(e, sheetName);
-        throw new Error(message);
+        console.error(`Could not update settings due to a Google Sheets error. Please check your configuration. Message: ${e.message}`);
+        throw new Error('Failed to save settings. Please try again later. (Reason: Google Sheets Error)');
     }
 }
 
@@ -312,28 +281,23 @@ export async function updateSchedulerSettingsInSheet(settings: SchedulerSettings
 // --- Helper Functions ---
 async function ensureSheetAndHeader(sheets: any, spreadsheetId: string, sheetName: string, headers: readonly string[]) {
   try {
-    // This will throw if the sheet or range does not exist
     await sheets.spreadsheets.values.get({
         spreadsheetId: spreadsheetId,
-        range: `${sheetName}!A1:A1`,
+        range: `${sheetName}!A1:Z1`,
     });
   } catch (err: any) {
-    const errorMsg = err?.response?.data?.error?.message || '';
-    // This specific error message indicates the sheet itself is missing.
+    const errorMsg = (err as GaxiosError).response?.data?.error?.message || '';
     if (errorMsg.includes("Unable to parse range")) {
       try {
-       // Create the sheet
        await sheets.spreadsheets.batchUpdate({
          spreadsheetId: spreadsheetId,
          requestBody: { requests: [{ addSheet: { properties: { title: sheetName } } }] },
        });
       } catch(e: any) {
-        const nestedErrorMsg = e?.message || '';
-        // It's possible another process created it in the meantime, which is fine.
+        const nestedErrorMsg = (e as Error).message || '';
         if (!nestedErrorMsg.includes('already exists')) throw e;
       }
       
-      // Now that we know the sheet exists, write the header row.
       await sheets.spreadsheets.values.update({
         spreadsheetId: spreadsheetId,
         range: `${sheetName}!A1`,
@@ -341,9 +305,7 @@ async function ensureSheetAndHeader(sheets: any, spreadsheetId: string, sheetNam
         requestBody: { values: [headers] },
       });
     } else {
-        // Re-throw other errors (e.g., permission denied)
         throw err;
     }
   }
 }
-
