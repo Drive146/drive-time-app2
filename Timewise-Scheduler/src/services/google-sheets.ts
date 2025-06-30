@@ -96,7 +96,8 @@ export async function getBookingCountsForMonth(year: number, month: number): Pro
   } catch (e: any) {
     const message = getGoogleSheetsErrorMessage(e, sheetName!);
     console.error(`Could not fetch booking counts due to a Google Sheets error. Please check your configuration. Message: ${message}`);
-    throw new Error(message);
+    // Return empty object on error to prevent server crash
+    return {};
   }
 }
 
@@ -143,7 +144,8 @@ export async function getBookedTimeSlotsForDay(date: string): Promise<Record<str
   } catch (e: any) {
     const message = getGoogleSheetsErrorMessage(e, sheetName!);
     console.error(`Could not fetch booked time slots due to a Google Sheets error. Please check your configuration. Message: ${message}`);
-    throw new Error(message);
+    // Return empty object on error to prevent server crash
+    return {};
   }
 }
 
@@ -273,7 +275,9 @@ export async function getSchedulerSettingsFromSheet(): Promise<SchedulerSettings
     } catch (e: any) {
         const message = getGoogleSheetsErrorMessage(e, sheetName);
         console.error(`Could not fetch scheduler settings due to a Google Sheets error. Please check your configuration. Message: ${message}`);
-        throw new Error(message);
+        // Return default settings on error to prevent server crash
+        console.warn('Returning default settings due to Google Sheets API error.');
+        return DEFAULT_SETTINGS;
     }
 }
 
@@ -342,3 +346,4 @@ async function ensureSheetAndHeader(sheets: any, spreadsheetId: string, sheetNam
     }
   }
 }
+
