@@ -1,7 +1,4 @@
 {
-  "functions": {
-    "source": ".firebase/timewise-scheduler-u7akn/functions"
-  },
   "hosting": {
     "source": ".",
     "ignore": [
@@ -9,11 +6,9 @@
       "**/.*",
       "**/node_modules/**"
     ],
-    "rewrites": [
-      {
-        "source": "**",
-        "function": "ssrtimewisescheduleru7a"
-      }
-    ]
+    "frameworksBackend": {
+      "region": "us-central1"
+    }
   }
 }
+
